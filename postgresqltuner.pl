@@ -78,6 +78,7 @@ my $help=0;
 my $work_mem_per_connection_percent=150;
 my @Ssh_opts=('BatchMode=yes');
 my $ssh_user=undef;
+my $k8s = 0;
 my $k8scontext=undef;
 my $k8snamespace=undef;
 my $k8spod=undef;
@@ -285,6 +286,7 @@ if ( (defined $k8scontext && $k8scontext ne "") || (defined $k8snamespace && $k8
 
 	if (defined(os_cmd("true"))) {
 		$can_run_os_cmd=1;
+		$k8s = 1;
 		print_report_ok("I can invoke executables");
 		$os->{name}=lc(os_cmd('uname -s'));
 		$os->{arch}=os_cmd('uname -m');
@@ -345,26 +347,38 @@ print_header_1("OS information");
 		print_report_info("OS: $os->{name} Version: $os->{version} Arch: $os->{arch}");
 
 		# OS Memory
-		if ($os->{name} eq 'darwin') {
-			my $os_mem=os_cmd("top -l 1 -S -n 0");
-			$os->{mem_used} = standard_units($os_mem =~ /PhysMem: (\d+)([GMK])/);
-			$os->{mem_free} = standard_units($os_mem =~ /(\d+)([GMK]) unused\./);
-			$os->{mem_total} = $os->{mem_free} + $os->{mem_used};
-			$os->{swap_used} = standard_units($os_mem =~ /Swap:\W+(\d+)([GMK])/);
-			$os->{swap_free} = standard_units($os_mem =~ /Swap:\W+\d+[GMK] \+ (\d+)([GMK]) free/);
-			$os->{swap_total} = $os->{swap_free} + $os->{swap_used};
-		} else {
-			my $os_mem="";
-			if ($os->{name} =~ 'bsd')
-			{
-				$os_mem=os_cmd("freecolor -ob");
+		if ($k8s) {
+			print_report_debug("Gathering memory settings via K8s.");
+			$os->{mem_used} = os_cmd('cat /sys/fs/cgroup/memory/memory.stat | egrep "total_rss|total_cache" | awk \'{sum+=$2;} END{printf "%f\n", sum;}\'');
+			$os->{mem_total} = os_cmd("cat /sys/fs/cgroup/memory/memory.limit_in_bytes");
+			$os->{mem_free} = $os->{mem_total} - $os->{mem_used};
+			$os->{swap_used} = 0;
+			$os->{swap_free} = 0;
+			$os->{swap_total} = 0;
+			print_report_debug("Memory used/total: ".int($os->{mem_used}/1024/1024)."M / ".int($os->{mem_total}/1024/1024)."M\n");
+		}
+		else {
+			if ($os->{name} eq 'darwin') {
+				my $os_mem=os_cmd("top -l 1 -S -n 0");
+				$os->{mem_used} = standard_units($os_mem =~ /PhysMem: (\d+)([GMK])/);
+				$os->{mem_free} = standard_units($os_mem =~ /(\d+)([GMK]) unused\./);
+				$os->{mem_total} = $os->{mem_free} + $os->{mem_used};
+				$os->{swap_used} = standard_units($os_mem =~ /Swap:\W+(\d+)([GMK])/);
+				$os->{swap_free} = standard_units($os_mem =~ /Swap:\W+\d+[GMK] \+ (\d+)([GMK]) free/);
+				$os->{swap_total} = $os->{swap_free} + $os->{swap_used};
+			} else {
+				my $os_mem="";
+				if ($os->{name} =~ 'bsd')
+				{
+					$os_mem=os_cmd("freecolor -ob");
+				}
+				else
+				{
+					$os_mem=os_cmd("free -b");
+				}
+				($os->{mem_total},$os->{mem_used},$os->{mem_free},$os->{mem_shared},$os->{mem_buffers},$os->{mem_cached})=($os_mem =~ /Mem:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
+				($os->{swap_total},$os->{swap_used},$os->{swap_free})=($os_mem =~ /Swap:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
 			}
-			else
-			{
-				$os_mem=os_cmd("free -b");
-			}
-			($os->{mem_total},$os->{mem_used},$os->{mem_free},$os->{mem_shared},$os->{mem_buffers},$os->{mem_cached})=($os_mem =~ /Mem:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
-			($os->{swap_total},$os->{swap_used},$os->{swap_free})=($os_mem =~ /Swap:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
 		}
 		undef $os->{mem_total} if ( 0 == $os->{mem_total}); # paranoid
 		print_report_info("OS total memory: ".format_size($os->{mem_total})) if (defined($os->{mem_total}));
